@@ -1,0 +1,8 @@
+
+springApp/.idea/
+springApp/.mvn
+springApp/target/classes/
+springApp/target/maven-archiver/
+springApp/target/maven-status/
+springApp/target/surefire-reports/
+springApp/target/test-classes/
