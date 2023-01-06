@@ -1,93 +1,112 @@
 package com.kuchumov.springApp.service;
 
-import com.kuchumov.springApp.DTO.*;
+import com.kuchumov.springApp.dto.*;
 import com.kuchumov.springApp.entity.DataModel;
-import com.kuchumov.springApp.exceptionHandler.customExceptions.FileIdNotFoundException;
-import com.kuchumov.springApp.exceptionHandler.customExceptions.ParsingDateException;
-import com.kuchumov.springApp.exceptionHandler.customExceptions.ParsingFormDataException;
-import com.kuchumov.springApp.exceptionHandler.customExceptions.ZipCreatingException;
+import com.kuchumov.springApp.exceptionHandler.customExceptions.*;
 import com.kuchumov.springApp.repository.DataModelRepository;
+import com.kuchumov.springApp.utilites.mappers.DataModelMapper;
+import com.kuchumov.springApp.utilites.transliterator.Transliterator;
 import lombok.Data;
-import lombok.NoArgsConstructor;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
+import javax.persistence.EntityManager;
 import javax.persistence.EntityNotFoundException;
+import javax.persistence.PersistenceContext;
+import javax.persistence.criteria.CriteriaBuilder;
+import javax.persistence.criteria.CriteriaQuery;
+import javax.persistence.criteria.Predicate;
+import javax.persistence.criteria.Root;
 import javax.transaction.Transactional;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
+import java.io.*;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.Date;
+import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 @Service
 @Data
-@NoArgsConstructor
 public class DataService {
     private DataModelRepository dataModelRepository;
 
-    @Autowired
+    @PersistenceContext
+    private EntityManager em;
+
     public DataService(DataModelRepository dataModelRepository) {
         this.dataModelRepository = dataModelRepository;
     }
 
-    public EmptyResponseDTO saveFiles(NewDataURLDTO newDataURLDTO) {
-        List<DataModel> dataModelList = mapDataURLDTOToModel(newDataURLDTO);
+    public EmptyResponseDTO saveFiles(DataURLDTO dataURLDTO) { // Сохранить несколько файлов dataURL
+        if (dataURLDTO.getFile().size() == 1) {
+            return saveFile(dataURLDTO.getFile().get(0), dataURLDTO.getComment());
+        }
+        List<DataModel> dataModelList = mapDataURLDtoToModel(dataURLDTO);
         dataModelRepository.saveAll(dataModelList);
         return new EmptyResponseDTO(HttpStatus.OK, "Saved successfully");
     }
 
-    protected List<DataModel> mapDataURLDTOToModel(NewDataURLDTO newDataURLDTO) {
-        List<DataURLFileDTO> dataURLFileList = newDataURLDTO.getFile();
+    protected EmptyResponseDTO saveFile(DataURLFileDTO dataURLFile, String comment) { // Сохранить один файл dataURL
+        DataModel dataModel;
+
+        String filePath = saveFileOnDisk(dataURLFile.getDataURL(), dataURLFile.getOriginalFilename());
+
+        dataModel = DataModelMapper.MAPPER.dataURLFileToModel(dataURLFile, comment, filePath);
+        dataModelRepository.save(dataModel);
+        return new EmptyResponseDTO(HttpStatus.OK, "Saved successfully");
+    }
+
+    protected List<DataModel> mapDataURLDtoToModel(DataURLDTO dataURLDTO) {
+        List<DataURLFileDTO> dataURLFileList = dataURLDTO.getFile();
         List<DataModel> dataModelList = new ArrayList<>();
 
         for (DataURLFileDTO dataURLFile : dataURLFileList) {
 
-            String dataURL = dataURLFile.getDataURL();
-            byte[] decodedBytes = Base64.getDecoder().decode(dataURL);
+            String filePath = saveFileOnDisk(dataURLFile.getDataURL(), dataURLFile.getOriginalFilename());
 
-            dataModelList.add(DataModel.builder()
-                    .changeDate(new Date())
-                    .comment(newDataURLDTO.getComment())
-                    .file(decodedBytes)
-                    .type(dataURLFile.getContentType())
-                    .name(dataURLFile.getOriginalFilename())
-                    .size(dataURLFile.getSize())
-                    .uploadDate(new Date())
-                    .build());
+            dataModelList.add(DataModelMapper.MAPPER.dataURLFileToModel(dataURLFile, dataURLDTO.getComment(), filePath));
         }
 
         return dataModelList;
     }
 
-    public EmptyResponseDTO saveFiles(NewFormDataDTO newFormDataDTO) {
-        List<DataModel> dataModelList = mapFormDataDTOToModel(newFormDataDTO);
-            dataModelRepository.saveAll(dataModelList);
+    public EmptyResponseDTO saveFiles(FormDataDTO formdataDTO) { // Сохранить несколько файлов formdata
+        if (formdataDTO.getFile().length == 1) {
+            return saveFile(formdataDTO.getFile()[0], formdataDTO.getComment());
+        }
+        List<DataModel> dataModelList = mapFormDataDtoToModel(formdataDTO);
+        dataModelRepository.saveAll(dataModelList);
         return new EmptyResponseDTO(HttpStatus.OK, "Saved successfully");
     }
 
-    protected List<DataModel> mapFormDataDTOToModel(NewFormDataDTO newFormDataDTO) {
-        MultipartFile[] formDataFileList = newFormDataDTO.getFile();
+    protected EmptyResponseDTO saveFile(MultipartFile multipartFile, String comment) { // Сохранить один файл formdata
+        DataModel dataModel;
+        try {
+            String filePath = saveFileOnDisk(multipartFile.getBytes(), multipartFile.getOriginalFilename());
+            dataModel = DataModelMapper.MAPPER.formDataFileToModel(multipartFile, comment, filePath);
+        } catch (IOException e) {
+            throw new ParsingFormDataException("ParsingFormDataException. " +
+                    "Failed to extract file. Try again later", e);
+        }
+        dataModelRepository.save(dataModel);
+        return new EmptyResponseDTO(HttpStatus.OK, "Saved successfully");
+    }
+
+    protected List<DataModel> mapFormDataDtoToModel(FormDataDTO formdataDTO) {
+        MultipartFile[] multipartFileList = formdataDTO.getFile();
         List<DataModel> dataModelList = new ArrayList<>();
-        for (MultipartFile formDataFile : formDataFileList) {
+        for (MultipartFile multipartFile : multipartFileList) {
             try {
-                dataModelList.add(DataModel.builder()
-                        .changeDate(new Date())
-                        .comment(newFormDataDTO.getComment())
-                        .file(formDataFile.getBytes())
-                        .type(formDataFile.getContentType())
-                        .name(formDataFile.getOriginalFilename())
-                        .size(formDataFile.getSize())
-                        .uploadDate(new Date())
-                        .build());
+                String filePath = saveFileOnDisk(multipartFile.getBytes(), multipartFile.getOriginalFilename());
+                dataModelList.add(DataModelMapper.MAPPER.formDataFileToModel(multipartFile, formdataDTO.getComment(), filePath));
             } catch (IOException e) {
                 throw new ParsingFormDataException("ParsingFormDataException. " +
                         "Failed to extract file. Try again later", e);
@@ -96,58 +115,122 @@ public class DataService {
         return dataModelList;
     }
 
+    protected String saveFileOnDisk(String dataURL, String name) {
+        byte[] decodedBytes = dataURLToByte(dataURL);
+        return saveFileOnDisk(decodedBytes, name);
+    }
+
+    protected String saveFileOnDisk(byte[] file, String name) {
+        checkBaseDirectory(); // Проверка директории, куда сохранять
+        String uniqueFilePath = getUniqueFilePath(name); // Уникальный путь (для дубликатов)
+        try (FileOutputStream fos = new FileOutputStream(uniqueFilePath)) {
+            fos.write(file);
+        } catch (IOException e) {
+            throw new FileLoadingException("Ошибка при сохранении файла", e);
+        }
+        return uniqueFilePath;
+    }
+
+    private byte[] dataURLToByte(String dataURL) {
+        return Base64.getDecoder().decode(dataURL);
+    }
+
+    private void checkBaseDirectory() {
+        File directory = new File("saved_files");
+        if (!directory.exists()) {
+            directory.mkdir();
+        }
+    }
+
+    private String getUniqueFilePath(String name) {
+        String originalFilePath = "saved_files/" + name;
+        File path = new File(originalFilePath);
+        if (path.exists()) {
+            Date date = new Date();
+            originalFilePath = "saved_files/" + date.getTime();
+            File directory = new File(originalFilePath);
+            if (directory.exists()) {
+                while (directory.exists()) {
+                    date = new Date();
+                    originalFilePath = "saved_files/" + date.getTime();
+                    directory = new File(originalFilePath);
+                }
+            }
+            directory.mkdir();
+            return originalFilePath + "/" + name;
+        } else {
+            return originalFilePath;
+        }
+    }
+
     public List<String> getAllNames() {
         return dataModelRepository.getAllNames();
     }
 
     @Transactional
-    public List<DataModelWithLinkDTO> getDataModelWithLinkDTO(String name, String date1,
-                                                              String date2, String[] types) {
-        List<DataModel> dataModels = new ArrayList<>();
+    public List<DataModelWithLinkDTO> getDataModelsWithLink(String name, String date1,
+                                                            String date2, String[] types) {
+
+        List<DataModel> results = getFilteredDataModelsList(name, date1, date2, types); // Получаем фильтрованные модели
+
+        List<DataModelWithLinkDTO> dataModelsWithLink = new ArrayList<>();
+        for (DataModel dm : results) { // Добавляем к моделям ссылку на скачивание
+            dataModelsWithLink.add(DataModelMapper.MAPPER.modelToDataModelWithLinkDTO(dm, getDownloadLink(dm.getId())));
+        }
+        return dataModelsWithLink; // Возвращаем
+    }
+
+    protected List<DataModel> getFilteredDataModelsList(String name, String date1,
+                                                      String date2, String[] types) {
+        CriteriaBuilder cb = em.getCriteriaBuilder();
+        CriteriaQuery<DataModel> cr = cb.createQuery(DataModel.class);
+        Root<DataModel> root = cr.from(DataModel.class);
+
+        Predicate[] predicates = getPredicates(cb, root, name, date1, date2, types); // Получаем динамически изменяемые предикаты
+
+        cr.select(root).where(predicates); // Выполняем по ним запрос
+        return em.createQuery(cr).getResultList();
+    }
+
+    private Predicate[] getPredicates(CriteriaBuilder cb, Root<DataModel> root, String name, String date1,
+                              String date2, String[] types) {
+        int predicateCount = 2; // Как минимум два фильтра есть всегда (поиск по пустой строке и по максимальному интервалу)
+
         List<Date> dates;
 
-        if (name == null) {
+        if (name == null) { // Если фильтра по имени нет, то принимаем за пустую строку, (LIKE запросе проигнорирует)
             name = "";
         }
 
-        if (date1 == null && date2 == null) {
+        if (date1 == null && date2 == null) { // Если фильтра по времени нет, то интервал "01.01.1970 - данный момент"
             Date dateFrom = new Date(0);
             Date dateTo = new Date();
             dates = List.of(dateFrom, dateTo);
-        } else if (date1 != null && date2 == null) {
+        } else if (date1 != null && date2 == null) { // Если фильтр по первой дате, то интервал "первая дата - данный момент"
             Date dateFrom = parseDate(date1);
             Date dateTo = new Date();
             dates = List.of(dateFrom, dateTo);
         } else if (date1 == null) {
-            Date dateFrom = new Date(0);
+            Date dateFrom = new Date(0); // Если фильтр по второй дате, то интервал "01.01.1970 - вторая дата"
             Date dateTo = parseDate(date2);
             dates = List.of(dateFrom, dateTo);
         } else {
-            dates = parseDate(date1, date2);
+            dates = parseDate(date1, date2); // Если фильтр по двум датам, то интервал "первая дата - вторая дата"
         }
 
-        if (types == null) {
-            types = new String[]{""};
+        if (types != null && types.length > 0) { // Если есть фильтр по типам, то изменяем количество предикатов
+            predicateCount += types.length;
         }
 
-        for (String type: types) {
-                dataModels.addAll(dataModelRepository.getAllModelsFilterByNameAndDateAndType(name, dates.get(0), dates.get(1), type));
-            }
+        Predicate[] predicates = new Predicate[predicateCount]; // Два стандартных предиката
+        predicates[0] = cb.between(root.get("changeDate"), dates.get(0), dates.get(1));
+        predicates[1] = cb.like(root.get("name"), "%" + name + "%");
 
-        List<DataModelWithLinkDTO> dataModelsWithLink = new ArrayList<>();
-        for (DataModel dm : dataModels ) {
-            dataModelsWithLink.add(DataModelWithLinkDTO.builder()
-                    .id(dm.getId())
-                    .changeDate(dm.getChangeDate())
-                    .comment(dm.getComment())
-                    .downloadLink(getDownloadLink(dm.getId()))
-                    .type(dm.getType())
-                    .name(dm.getName())
-                    .size(dm.getSize())
-                    .uploadDate(dm.getUploadDate())
-                    .build());
+        for (int i = 2; i < predicateCount; i++) { // Предикаты по типу, если такие имеются
+            predicates[i] = cb.like(root.get("type"), "%" + types[i - 2] + "%");
         }
-        return dataModelsWithLink;
+
+        return predicates;
     }
 
     private List<Date> parseDate(String date1, String date2) {
@@ -174,11 +257,11 @@ public class DataService {
     }
 
     private String getDownloadLink(Long id) {
-        return "/files/"+ id;
+        return "/files/" + id;
     }
 
     @Transactional
-    public ResponseEntity<?> getFile(Long id) {
+    public ResponseEntity<byte[]> getFile(Long id) {
         if (!dataModelRepository.existsById(id)) {
             throw new FileIdNotFoundException("Bad file id. File with this id not found");
         }
@@ -189,9 +272,10 @@ public class DataService {
         headers.set("Content-type", dataModel.getType());
 
         String filename = encodeToUTF8(dataModel.getName());
+        byte[] file = getFileFromDisk(dataModel.getFilePath());
 
-        headers.set("Content-Disposition","attachment;filename=" + filename);
-        return ResponseEntity.status(HttpStatus.OK).headers(headers).body(dataModel.getFile());
+        headers.set("Content-Disposition", "attachment;filename=" + filename);
+        return ResponseEntity.status(HttpStatus.OK).headers(headers).body(file);
     }
 
     private String encodeToUTF8(String filename) {
@@ -199,11 +283,23 @@ public class DataService {
         URLEncodedFileName = URLEncoder.encode(filename, StandardCharsets.UTF_8);
         return URLEncodedFileName.replace('+', ' ');
     }
+
+    protected byte[] getFileFromDisk(String filePath) {
+        File file = new File(filePath);
+        byte[] bytes = new byte[(int) file.length()];
+        try (FileInputStream fis = new FileInputStream(file)) {
+            fis.read(bytes);
+        } catch (IOException e) {
+            throw new FileLoadingException("Ошибка получения файла", e);
+        }
+        return bytes;
+    }
+
     @Transactional
-    public ResponseEntity<?> getZip(Long[] id) {
+    public ResponseEntity<byte[]> getZip(Long[] id) {
         HttpHeaders headers = new HttpHeaders();
         headers.set("Content-type", "application/zip");
-        headers.set("Content-Disposition","attachment;filename=files.zip");
+        headers.set("Content-Disposition", "attachment;filename=files.zip");
         return ResponseEntity.status(HttpStatus.OK).headers(headers).body(getFilesZipArray(id));
     }
 
@@ -216,8 +312,8 @@ public class DataService {
                 for (Long file : files) {
                     DataModel dataModel = dataModelRepository.getReferenceById(file);
 
-                    byte[] input = dataModel.getFile();
-                    String zipEntryName = transliterate(dataModel.getName());
+                    byte[] input = getFileFromDisk(dataModel.getFilePath());
+                    String zipEntryName = Transliterator.transliterate(dataModel.getName());
                     ZipEntry entry = new ZipEntry(zipEntryName);
                     entry.setSize(input.length);
                     zos.putNextEntry(entry);
@@ -237,67 +333,13 @@ public class DataService {
         return bos.toByteArray();
     }
 
-    private String transliterate(String str) {
-        StringBuilder stringBuilder = new StringBuilder();
-        String transliteratedStr;
-
-        Map<String, String> conformity = new HashMap<>();
-        conformity.put("А", "A");
-        conformity.put("Б", "B");
-        conformity.put("В", "V");
-        conformity.put("Г", "G");
-        conformity.put("Д", "D");
-        conformity.put("Е", "YE");
-        conformity.put("Ё", "YO");
-        conformity.put("Ж", "G");
-        conformity.put("З", "Z");
-        conformity.put("И", "I");
-        conformity.put("Й", "Y");
-        conformity.put("К", "K");
-        conformity.put("Л", "L");
-        conformity.put("М", "M");
-        conformity.put("Н", "N");
-        conformity.put("О", "O");
-        conformity.put("П", "P");
-        conformity.put("Р", "R");
-        conformity.put("С", "S");
-        conformity.put("Т", "T");
-        conformity.put("У", "U");
-        conformity.put("Ф", "F");
-        conformity.put("Х", "H");
-        conformity.put("Ц", "C");
-        conformity.put("Ч", "CH");
-        conformity.put("Ш", "SH");
-        conformity.put("Щ", "SH");
-        conformity.put("Ъ", "");
-        conformity.put("Ы", "Y");
-        conformity.put("Ь", "");
-        conformity.put("Э", "YE");
-        conformity.put("Ю", "YU");
-        conformity.put("Я", "YA");
-
-        for (int i = 0; i < str.length(); i++) {
-            String key = str.substring(i, i + 1);
-            if (conformity.containsKey(key.toUpperCase())) {
-                if (conformity.containsKey(key)) {
-                    stringBuilder.append(conformity.get(key));
-                } else {
-                    stringBuilder.append(conformity.get(key.toUpperCase()).toLowerCase());
-                }
-            } else if ((int) key.charAt(0) > 127) {
-                stringBuilder.append("?");
-            } else {
-                stringBuilder.append(key);
-            }
-        }
-        transliteratedStr = stringBuilder.toString();
-        return transliteratedStr;
-    }
-
     @Transactional
     public EmptyResponseDTO updateCommentById(Long id, String comment) {
-        if (dataModelRepository.existsById(id)) {
-            dataModelRepository.updateCommentById(id, comment, new Date());
+        if (dataModelRepository.findById(id).isPresent()) {
+            DataModel dataModel = dataModelRepository.findById(id).get();
+            dataModel.setComment(comment);
+            dataModel.setChangeDate(new Date());
+            dataModelRepository.save(dataModel);
             return new EmptyResponseDTO(HttpStatus.OK, "Updated successfully");
         } else {
             throw new FileIdNotFoundException("Bad file id. File with this id not found");
@@ -307,7 +349,7 @@ public class DataService {
     @Transactional
     public EmptyResponseDTO deleteDataModelById(Long id) {
         if (dataModelRepository.existsById(id)) {
-            dataModelRepository.deleteDataModelById(id);
+            dataModelRepository.deleteById(id);
             return new EmptyResponseDTO(HttpStatus.OK, "Deleted successfully");
         } else {
             throw new FileIdNotFoundException("Bad file id. File with this id not found");
