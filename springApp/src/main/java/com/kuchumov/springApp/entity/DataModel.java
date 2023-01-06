@@ -12,6 +12,7 @@ import java.util.Date;
 @Entity
 @Table(name = "data_model")
 @Getter
+@Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
@@ -30,7 +31,5 @@ public class DataModel {
     @Max(value = 15000000, message = "Size valid error. Size more than 15 MB")
     private Long size;
     private String comment;
-    @Lob
-//    @Type(type="org.hibernate.type.BinaryType")
-    private byte[] file;
+    private String filePath;
 }

@@ -1,0 +1,20 @@
+spring:
+
+  datasource:
+    url: jdbc:postgresql://localhost:5433/docker_db
+    username: postgres
+    password: postgres
+    driver-class-name: org.postgresql.Driver
+
+  servlet:
+    multipart:
+      max-file-size: 16000KB
+      max-request-size: 100000KB
+
+  mvc:
+    pathmatch:
+      matching-strategy: ant_path_matcher # ??? swagger
+
+  liquibase:
+    enabled: true
+    change-log: classpath:db/changelog/changelog-root.yml

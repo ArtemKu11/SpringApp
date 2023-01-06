@@ -6,3 +6,5 @@ springApp/target/maven-archiver/
 springApp/target/maven-status/
 springApp/target/surefire-reports/
 springApp/target/test-classes/
+springApp/springApp.iml
+springApp/target/generated-sources/
